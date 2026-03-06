@@ -65,22 +65,18 @@ ui_print "- Extracting zygisk libraries"
 if [ "$FLAVOR" == "zygisk" ]; then
   mkdir -p "$MODPATH/zygisk"
   if [ "$ARCH" = "arm" ] || [ "$ARCH" = "arm64" ]; then
-    extract "$ZIPFILE" "lib/armeabi-v7a/libinject.so" "$MODPATH/zygisk" true
-    mv "$MODPATH/zygisk/libinject.so" "$MODPATH/zygisk/armeabi-v7a.so"
+    extract "$ZIPFILE" "zygisk/armeabi-v7a.so" "$MODPATH"
 
     if [ "$IS64BIT" = true ]; then
-      extract "$ZIPFILE" "lib/arm64-v8a/libinject.so" "$MODPATH/zygisk" true
-      mv "$MODPATH/zygisk/libinject.so" "$MODPATH/zygisk/arm64-v8a.so"
+      extract "$ZIPFILE" "zygisk/arm64-v8a.so" "$MODPATH"
     fi
   fi
 
   if [ "$ARCH" = "x86" ] || [ "$ARCH" = "x64" ]; then
-    extract "$ZIPFILE" "lib/x86_64/libinject.so" "$MODPATH/zygisk" true
-    mv "$MODPATH/zygisk/libinject.so" "$MODPATH/zygisk/x86_64.so"
+    extract "$ZIPFILE" "zygisk/x86.so" "$MODPATH"
 
     if [ "$IS64BIT" = true ]; then
-      extract "$ZIPFILE" "lib/x86/libinject.so" "$MODPATH/zygisk" true
-      mv "$MODPATH/zygisk/libinject.so" "$MODPATH/zygisk/x86.so"
+      extract "$ZIPFILE" "zygisk/x86_64.so" "$MODPATH"
     fi
   fi
 fi

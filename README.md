@@ -12,41 +12,25 @@ module_id
     └── x86_64.so
 ```
 
-- 使用 gradlew 编译：`产物只有so`
-
-```
-.\gradlew :module:externalNativeBuildRelease
-```
-
-```
-module_id
-└── build
-    └── intermediates
-        └── ndkBuild
-            └── release
-                └── obj
-                    └── local
-                        ├── arm64-v8a
-                        ├── armeabi-v7a
-                        ├── x86
-                        └── x86_64
-```
-
 - 使用 gradlew 编译：`产物有so`和`magisk`对应的zip
 
-```
-./gradlew packageMagiskZip
-```
+> ./gradlew zipRelease 
 
-```
+
+```text
 module_id
 └── build
     └── outputs
         └── magisk
+
 ```
 
 
-- 新的编译命令： 
-```
-./gradlew clean :module:assemble
-```
+
+- 清除编译
+> ./gradlew clean :module:assemble
+
+
+
+
+- 如果报错环境问题，可以指定项目jdk版本，在根目录的`gradle.properties`添加 `org.gradle.java.home=C:\\Program Files\\Java\\jdk-17`指定版本

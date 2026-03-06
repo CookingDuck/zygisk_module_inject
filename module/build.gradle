@@ -10,6 +10,13 @@ android {
             path("jni/Android.mk")
         }
     }
+    defaultConfig {
+        externalNativeBuild {
+            ndkBuild {
+                arguments "APP_STL=c++_static"
+            }
+        }
+    }
     ndkVersion '26.1.10909125'
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
@@ -23,8 +30,8 @@ import org.apache.tools.ant.filters.FixCrLfFilter
 import java.security.MessageDigest
 
 def outDir = file("${project.buildDir}/outputs/magisk")
-def magiskModuleId = 'zygiskModule'
-def moduleName = 'zygiskModule'
+def magiskModuleId = 'SystemInject'
+def moduleName = 'SystemInject'
 def moduleVersion = '1.0.0'
 def moduleVersionCode = 100
 def moduleAuthor = 'zheng'
@@ -40,6 +47,8 @@ afterEvaluate {
 
         task("prepareMagiskFiles${variantCapped}", type: Sync) {
             dependsOn("assemble$variantCapped")
+
+            duplicatesStrategy = DuplicatesStrategy.INCLUDE
 
             def templatePath = "$rootDir/template/magisk_module"
 
@@ -60,13 +69,27 @@ afterEvaluate {
                 filter(FixCrLfFilter.class,
                         eol: FixCrLfFilter.CrLf.newInstance("lf"))
             }
-            from("$buildDir/intermediates/stripped_native_libs/$variantLowered/out/lib") {
-                into 'lib'
+            from("${projectDir}/config.json")
+            from("$buildDir/intermediates/stripped_native_libs/$variantLowered/out/lib/arm64-v8a/libinject.so") {
+                into 'zygisk'
+                rename { 'arm64-v8a.so' }
+            }
+            from("$buildDir/intermediates/stripped_native_libs/$variantLowered/out/lib/armeabi-v7a/libinject.so") {
+                into 'zygisk'
+                rename { 'armeabi-v7a.so' }
+            }
+            from("$buildDir/intermediates/stripped_native_libs/$variantLowered/out/lib/x86/libinject.so") {
+                into 'zygisk'
+                rename { 'x86.so' }
+            }
+            from("$buildDir/intermediates/stripped_native_libs/$variantLowered/out/lib/x86_64/libinject.so") {
+                into 'zygisk'
+                rename { 'x86_64.so' }
             }
             doLast {
                 fileTree("$magiskDir").visit { f ->
                     if (f.directory) return
-                    if (f.file.name == '.gitattributes') return
+                    if (f.file.name == '.gitattributes' || f.file.name.endsWith('.sha256sum')) return
 
                     def md = MessageDigest.getInstance("SHA-256")
                     f.file.eachByte 4096, { bytes, size ->
@@ -101,6 +124,7 @@ afterEvaluate {
             commandLine android.adbExecutable, "shell", "reboot"
         }
 
-        variant.assembleProvider.get().finalizedBy("zip${variantCapped}")
+        def zipTaskName = "zip${variantCapped}"
+        variant.assembleProvider.get().finalizedBy(zipTaskName)
     }
 }

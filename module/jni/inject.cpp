@@ -14,8 +14,14 @@ using zygisk::Api;
 using zygisk::AppSpecializeArgs;
 using zygisk::ServerSpecializeArgs;
 
-// 简单的调试日志宏，统一使用标签 MyModule
-#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "Zygisk", __VA_ARGS__)
+// 简单的调试日志宏，统一使用标签 zheng_inject
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "zheng_inject", __VA_ARGS__)
+
+// 静态构造函数，.so 一加载就会打印
+__attribute__((constructor))
+static void on_load_static() {
+    LOGI("SystemInject library constructor called (library is being loaded)\n");
+}
 
 // 示例模块：在进程专项化阶段按配置选择性加载自定义 payload.so
 class ZygiskAttach : public zygisk::ModuleBase {
@@ -26,21 +32,32 @@ public:
     void onLoad(Api *api, JNIEnv *env) override {
         this->api = api;
         this->env = env;
+//        LOGI("ZygiskAttach module loaded via onLoad\n");
     }
 
     // 应用进程专项化前：获取进程名并进入统一处理逻辑
     void preAppSpecialize(AppSpecializeArgs *args) override {
+        if (args->nice_name == nullptr) {
+            return;
+        }
+
         const char *process = env->GetStringUTFChars(args->nice_name, nullptr);
+        if (process == nullptr) {
+            return;
+        }
+
         if (canUseInject(process)) {
-            LOGD("process=[%s], on\n", process);
+            LOGI("process=[%s], on\n", process);
         } else {
-            LOGD("process=[%s], disabled or filtered\n", process);
+            // 改为 INFO 级别，确保能看到
+            LOGI("process=[%s], filtered\n", process);
         }
 
         // system_server 专项化前：同样走统一处理逻辑
         api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
         env->ReleaseStringUTFChars(args->nice_name, process);
     }
+
 
     void preServerSpecialize(ServerSpecializeArgs *args) override {
         preSpecialize("system_server");
@@ -75,7 +92,7 @@ private:
                                 }
                             }
                         } catch (const nlohmann::json::parse_error &e) {
-                            LOGD("JSON parse error: %s\n", e.what());
+                            LOGI("JSON parse error: %s\n", e.what());
                         }
                     }
                 }
@@ -85,7 +102,7 @@ private:
     }
 
     void preSpecialize(const char *process) {
-        LOGD("process=[%s], preServerSpecialize\n", process);
+        LOGI("process=[%s], preServerSpecialize\n", process);
     }
 };
 
@@ -98,7 +115,7 @@ static void companion_handler(int i) {
     }
     unsigned r;
     read(urandom, &r, sizeof(r));
-    LOGD("companion r=[%u]\n", r);
+    LOGI("companion r=[%u]\n", r);
     write(i, &r, sizeof(r));
 }
 
