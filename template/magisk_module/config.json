@@ -1,1 +1,7 @@
-﻿[]
+﻿[
+  {
+    "package": "com.zhenxi.hunter",
+    "loadSo": true,
+    "soName": "libtrace.so"
+  }
+]

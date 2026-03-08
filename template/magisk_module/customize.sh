@@ -60,6 +60,11 @@ extract "$ZIPFILE" 'service.sh'         "$MODPATH"
 extract "$ZIPFILE" 'uninstall.sh'       "$MODPATH"
 extract "$ZIPFILE" 'config.json'        "$MODPATH"
 
+ui_print "- Extracting modules folder"
+unzip -o "$ZIPFILE" "modules/*" -d "$MODPATH" >&2
+# 如果 zip 里真的没东西，确保目录依然存在
+mkdir -p "$MODPATH/modules"
+
 ui_print "- Extracting zygisk libraries"
 
 if [ "$FLAVOR" == "zygisk" ]; then

@@ -30,8 +30,8 @@ import org.apache.tools.ant.filters.FixCrLfFilter
 import java.security.MessageDigest
 
 def outDir = file("${project.buildDir}/outputs/magisk")
-def magiskModuleId = 'SystemInject'
-def moduleName = 'SystemInject'
+def magiskModuleId = 'AAAIjt'
+def moduleName = 'AAAIjt'
 def moduleVersion = '1.0.0'
 def moduleVersionCode = 100
 def moduleAuthor = 'zheng'
@@ -69,7 +69,10 @@ afterEvaluate {
                 filter(FixCrLfFilter.class,
                         eol: FixCrLfFilter.CrLf.newInstance("lf"))
             }
-            from("${projectDir}/config.json")
+            from("${templatePath}/config.json")
+            from("${templatePath}/modules") {
+                into 'modules'
+            }
             from("$buildDir/intermediates/stripped_native_libs/$variantLowered/out/lib/arm64-v8a/libinject.so") {
                 into 'zygisk'
                 rename { 'arm64-v8a.so' }
