@@ -2,6 +2,7 @@
   {
     "package": "com.zhenxi.hunter",
     "loadSo": true,
-    "soName": "libtrace.so"
+    "soName": "libtrace.so",
+    "useCustomLinker": true
   }
 ]

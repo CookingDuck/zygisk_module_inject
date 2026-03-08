@@ -12,6 +12,7 @@
 
 #include "include/zygisk.hpp"
 #include "include/json.hpp"
+#include "mylinker/include/mylinker.h"
 
 using zygisk::Api;
 using zygisk::AppSpecializeArgs;
@@ -35,6 +36,9 @@ public:
     void onLoad(Api *api, JNIEnv *env) override {
         this->api = api;
         this->env = env;
+        if (env->GetJavaVM(&this->vm) != JNI_OK) {
+            this->vm = nullptr;
+        }
     }
 
     // 应用进程专项化前：获取进程名并进入统一处理逻辑
@@ -63,6 +67,7 @@ public:
 private:
     Api *api;
     JNIEnv *env;
+    JavaVM *vm;
 
     bool canUseInject(const char *process) {
         bool canLoad = false;
@@ -116,6 +121,7 @@ private:
 
     void inject(const char *process) {
         std::string soPath = "";
+        bool useCustomLinker = false;
         int dirfd = api->getModuleDir();
         if (dirfd >= 0) {
             std::string modulePath = getModulePath(dirfd);
@@ -131,15 +137,14 @@ private:
                             nlohmann::json config = nlohmann::json::parse(buf.data());
                             if (config.is_array()) {
                                 for (const auto &item: config) {
-                                    // 使用 value 提供默认值，防止字段缺失报错
                                     std::string pkg = item.value("package", "");
                                     bool loadSo = item.value("loadSo", false);
                                     
                                     if (!pkg.empty() && std::string(process).find(pkg) == 0) {
                                         if (loadSo && !modulePath.empty()) {
                                             std::string soName = item.value("soName", "");
+                                            useCustomLinker = item.value("useCustomLinker", false);
                                             if (!soName.empty()) {
-                                                // 拼接路径: [模块路径]/modules/[soName]
                                                 soPath = modulePath + "/modules/" + soName;
                                             }
                                         }
@@ -158,13 +163,26 @@ private:
         }
 
         if (!soPath.empty()) {
-            LOGI("process=[%s], target soPath=[%s], loading via memfd...\n", process, soPath.c_str());
-            loadSo(soPath);
+            if (useCustomLinker) {
+                LOGI("process=[%s], target soPath=[%s], loading via custom linker...\n", process, soPath.c_str());
+                loadSoWithCustomLinker(soPath);
+            } else {
+                LOGI("process=[%s], target soPath=[%s], loading via memfd...\n", process, soPath.c_str());
+                loadSo(soPath);
+            }
         }
     }
 
     void preSpecialize(const char *process) {
         LOGI("process=[%s], preServerSpecialize\n", process);
+    }
+
+    void loadSoWithCustomLinker(std::string soPath) {
+        if (mylinker_load_library(soPath.c_str(), this->vm)) {
+            LOGI("Successfully loaded .so via custom linker: %s\n", soPath.c_str());
+        } else {
+            LOGI("Failed to load .so via custom linker: %s\n", soPath.c_str());
+        }
     }
 
     void loadSo(std::string soPath) {
