@@ -1,8 +1,17 @@
 [
   {
+    "_comment": "配置说明：package(包名/进程名前缀), loadSo(是否加载SO), soName(SO文件名), model(注入模式), loadDex(预留), dexPath(预留)",
+    "_model_description": "model 选项: 'memfd'(默认,普通内存加载), 'custom_linker'(自定义链接器), 'memfd_jit'(进阶规避,模拟JIT缓存名称)",
     "package": "com.zhenxi.hunter",
     "loadSo": true,
     "soName": "libtrace.so",
-    "useCustomLinker": true
+    "model": "memfd_jit",
+    "loadDex": false,
+    "dexPath": ""
+  },
+  {
+    "package": "com.android.settings",
+    "loadSo": false,
+    "model": "memfd"
   }
 ]

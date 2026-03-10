@@ -32,8 +32,8 @@ import java.security.MessageDigest
 def outDir = file("${project.buildDir}/outputs/magisk")
 def magiskModuleId = 'AAAIjt'
 def moduleName = 'AAAIjt'
-def moduleVersion = '1.0.0'
-def moduleVersionCode = 100
+def moduleVersion = '3.1.0'
+def moduleVersionCode = 300
 def moduleAuthor = 'zheng'
 def moduleDescription = '无痕注入so和dex'
 

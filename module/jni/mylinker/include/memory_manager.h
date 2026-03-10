@@ -8,7 +8,7 @@ public:
     ~MemoryManager();
 
     bool ReserveAddressSpace(const ElfW(Phdr)* phdr_table, size_t phdr_num);
-
+    bool UseExistingMemory(void* address, size_t size, const ElfW(Phdr)* phdr_table, size_t phdr_num);
     bool LoadSegments(const ElfW(Phdr)* phdr_table, size_t phdr_num,
                       void* mapped_file, size_t file_size);
 
@@ -31,4 +31,5 @@ private:
     size_t load_size_;
     ElfW(Addr) load_bias_;
     const ElfW(Phdr)* loaded_phdr_;
+    bool is_external_memory_ = false;
 };

@@ -41,6 +41,19 @@ bool ElfReader::Open(const char* path) {
     return true;
 }
 
+bool ElfReader::Open(void* address, size_t size) {
+    if (address == nullptr || size < sizeof(ElfW(Ehdr))) {
+        return false;
+    }
+
+    path_ = "memory";
+    fd_ = -2; // 特殊标记，表示内存模式，且不需要 munmap
+    file_size_ = size;
+    mapped_file_ = address;
+
+    return true;
+}
+
 bool ElfReader::Read() {
     if (!ReadElfHeader()) {
         return false;
@@ -58,15 +71,16 @@ bool ElfReader::Read() {
 }
 
 void ElfReader::Close() {
-    if (mapped_file_ != nullptr && mapped_file_ != MAP_FAILED) {
+    // 只有在通过文件打开（fd >= 0）时才执行 munmap
+    if (fd_ >= 0 && mapped_file_ != nullptr && mapped_file_ != MAP_FAILED) {
         munmap(mapped_file_, file_size_);
-        mapped_file_ = nullptr;
     }
+    mapped_file_ = nullptr;
 
     if (fd_ >= 0) {
         close(fd_);
-        fd_ = -1;
     }
+    fd_ = -1;
 
     if (phdr_table_ != nullptr) {
         free(phdr_table_);

@@ -33,6 +33,23 @@ bool MemoryManager::ReserveAddressSpace(const ElfW(Phdr)* phdr_table, size_t phd
     return true;
 }
 
+bool MemoryManager::UseExistingMemory(void* address, size_t size, const ElfW(Phdr)* phdr_table, size_t phdr_num) {
+    ElfW(Addr) min_vaddr;
+    load_size_ = phdr_table_get_load_size(phdr_table, phdr_num, &min_vaddr);
+    
+    if (load_size_ > size) {
+        LOGE("Existing memory size too small: %zu < %zu", size, load_size_);
+        return false;
+    }
+
+    load_start_ = address;
+    load_bias_ = reinterpret_cast<ElfW(Addr)>(address) - min_vaddr;
+    is_external_memory_ = true; // 标记为外部内存模式
+    
+    LOGD("Using existing address space at %p, bias: 0x%llx", address, (unsigned long long)load_bias_);
+    return true;
+}
+
 bool MemoryManager::LoadSegments(const ElfW(Phdr)* phdr_table, size_t phdr_num,
                                  void* mapped_file, size_t file_size) {
     LOGD("Starting LoadSegments: phdr_num=%zu, file_size=%zu", phdr_num, file_size);
@@ -70,9 +87,12 @@ bool MemoryManager::LoadSegments(const ElfW(Phdr)* phdr_table, size_t phdr_num,
             void* seg_addr = reinterpret_cast<void*>(seg_page_start);
             size_t seg_size = seg_page_end - seg_page_start;
 
-            if (mprotect(seg_addr, seg_size, PROT_READ | PROT_WRITE) < 0) {
-                LOGE("Cannot mprotect for loading: %s", strerror(errno));
-                return false;
+            // 如果是外部内存模式，跳过权限修改（由外部统一控制）
+            if (!is_external_memory_) {
+                if (mprotect(seg_addr, seg_size, PROT_READ | PROT_WRITE) < 0) {
+                    LOGE("Cannot mprotect for loading: %s", strerror(errno));
+                    return false;
+                }
             }
 
             void* src = static_cast<char*>(mapped_file) + phdr->p_offset;
@@ -152,6 +172,12 @@ bool MemoryManager::FindPhdr(const ElfW(Phdr)* phdr_table, size_t phdr_num) {
 }
 
 bool MemoryManager::ProtectSegments(const ElfW(Phdr)* phdr_table, size_t phdr_num) {
+    // 如果是外部内存模式，跳过权限修改（由外部统一控制）
+    if (is_external_memory_) {
+        LOGD("Skipping ProtectSegments for external memory mode");
+        return true;
+    }
+
     for (size_t i = 0; i < phdr_num; ++i) {
         const ElfW(Phdr)* phdr = &phdr_table[i];
 

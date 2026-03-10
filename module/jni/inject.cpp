@@ -1,38 +1,34 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <android/log.h>
-#include <dlfcn.h>
-#include <android/dlext.h>
-#include <string.h>
-#include <sys/stat.h>
-#include <sys/syscall.h>
-#include <sys/sendfile.h>
-#include <linux/memfd.h>
 #include <vector>
+#include <memory>
 
 #include "include/zygisk.hpp"
-#include "include/json.hpp"
-#include "mylinker/include/mylinker.h"
+#include "config_manager.hpp"
+#include "injector.hpp"
 
 using zygisk::Api;
 using zygisk::AppSpecializeArgs;
 using zygisk::ServerSpecializeArgs;
 
-// 简单的调试日志宏，统一使用标签 zheng_inject
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "zheng_inject", __VA_ARGS__)
-
-// 静态构造函数，.so 一加载就会打印
+// 静态构造函数，确保 .so 加载即打印，方便确认模块是否正常运行
 __attribute__((constructor))
 static void on_load_static() {
-    LOGI("SystemInject library constructor called (library is being loaded)\n");
+    __android_log_print(ANDROID_LOG_INFO, "zheng_inject", "Zygisk module library constructor called!\n");
 }
 
-// 示例模块：在进程专项化阶段按配置选择性加载自定义 payload.so
+/**
+ * @brief Zygisk 模块核心类
+ * 负责与 Zygisk 框架交互，并在进程专项化阶段触发注入逻辑。
+ */
 class ZygiskAttach : public zygisk::ModuleBase {
 
 public:
-
-    // 模块加载回调：保存 Zygisk API 句柄与 JNIEnv 以备后续使用
+    /**
+     * @brief 模块加载回调
+     * 保存 API 句柄和 JavaVM 指针，以便后续注入器使用。
+     */
     void onLoad(Api *api, JNIEnv *env) override {
         this->api = api;
         this->env = env;
@@ -41,27 +37,28 @@ public:
         }
     }
 
-    // 应用进程专项化前：获取进程名并进入统一处理逻辑
+    /**
+     * @brief 应用进程专项化前的回调
+     * 在此阶段判断是否需要对当前应用进行注入。
+     */
     void preAppSpecialize(AppSpecializeArgs *args) override {
-        if (args->nice_name == nullptr) {
-            return;
-        }
+        if (args->nice_name == nullptr) return;
 
         const char *process = env->GetStringUTFChars(args->nice_name, nullptr);
-        if (process == nullptr) {
-            return;
+        if (process != nullptr) {
+            handleInjection(process);
+            env->ReleaseStringUTFChars(args->nice_name, process);
         }
-
-        inject(process);
-
-        // system_server 专项化前：同样走统一处理逻辑
+        
+        // 设置选项以在模块卸载时自动关闭句柄
         api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
-        env->ReleaseStringUTFChars(args->nice_name, process);
     }
 
-
+    /**
+     * @brief 系统服务 (system_server) 专项化前的回调
+     */
     void preServerSpecialize(ServerSpecializeArgs *args) override {
-        preSpecialize("system_server");
+        handleInjection("system_server");
     }
 
 private:
@@ -69,186 +66,80 @@ private:
     JNIEnv *env;
     JavaVM *vm;
 
-    bool canUseInject(const char *process) {
-        bool canLoad = false;
+    /**
+     * @brief 统一注入处理逻辑
+     */
+    void handleInjection(const char *process) {
+        LOGI("handleInjection called for process: [%s]", process);
+        
         int dirfd = api->getModuleDir();
-        if (dirfd >= 0) {
-            int cfd = openat(dirfd, "config.json", O_RDONLY | O_CLOEXEC);
-            if (cfd >= 0) {
-                struct stat st;
-                if (fstat(cfd, &st) == 0 && st.st_size > 0) {
-                    std::vector<char> buf(st.st_size + 1);
-                    ssize_t n = read(cfd, buf.data(), st.st_size);
-                    if (n > 0) {
-                        buf[n] = 0;
-                        try {
-                            nlohmann::json config = nlohmann::json::parse(buf.data());
-                            if (config.is_array()) {
-                                for (const auto &item: config) {
-                                    std::string pkg = item.value("package", "");
-                                    bool loadSo = item.value("loadSo", false);
-                                    // 使用前缀匹配，支持子进程注入
-                                    if (!pkg.empty() && std::string(process).find(pkg) == 0 && loadSo) {
-                                        canLoad = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        } catch (const nlohmann::json::parse_error &e) {
-                            LOGI("JSON parse error: %s\n", e.what());
-                        }
-                    }
-                }
-                close(cfd);
-            }
+        if (dirfd < 0) {
+            LOGI("Failed to get module directory FD");
+            return;
+        }
+
+        // 1. 解析配置
+        ConfigManager configManager(dirfd);
+        InjectConfig config = configManager.getMatchingConfig(process);
+        
+        if (!config.matched) {
+            // 如果觉得日志太多，测试稳定后可以删掉这一行
+            // LOGI("Process [%s] not matched in config.", process);
             close(dirfd);
+            return;
         }
-        return canLoad;
-    }
 
-    // 获取模块的真实绝对路径
-    std::string getModulePath(int dirfd) {
-        char path[PATH_MAX];
-        char proc_path[64];
-        snprintf(proc_path, sizeof(proc_path), "/proc/self/fd/%d", dirfd);
-        ssize_t len = readlink(proc_path, path, sizeof(path) - 1);
-        if (len != -1) {
-            path[len] = '\0';
-            return std::string(path);
-        }
-        return "";
-    }
+        if (config.loadSo) {
+            std::string rootPath = configManager.getModuleRootPath();
+            if (rootPath.empty()) {
+                LOGI("Error: Could not resolve module root path.");
+                close(dirfd);
+                return;
+            }
 
-    void inject(const char *process) {
-        std::string soPath = "";
-        bool useCustomLinker = false;
-        int dirfd = api->getModuleDir();
-        if (dirfd >= 0) {
-            std::string modulePath = getModulePath(dirfd);
-            int cfd = openat(dirfd, "config.json", O_RDONLY | O_CLOEXEC);
-            if (cfd >= 0) {
-                struct stat st;
-                if (fstat(cfd, &st) == 0 && st.st_size > 0) {
-                    std::vector<char> buf(st.st_size + 1);
-                    ssize_t n = read(cfd, buf.data(), st.st_size);
-                    if (n > 0) {
-                        buf[n] = 0;
-                        try {
-                            nlohmann::json config = nlohmann::json::parse(buf.data());
-                            if (config.is_array()) {
-                                for (const auto &item: config) {
-                                    std::string pkg = item.value("package", "");
-                                    bool loadSo = item.value("loadSo", false);
-                                    
-                                    if (!pkg.empty() && std::string(process).find(pkg) == 0) {
-                                        if (loadSo && !modulePath.empty()) {
-                                            std::string soName = item.value("soName", "");
-                                            useCustomLinker = item.value("useCustomLinker", false);
-                                            if (!soName.empty()) {
-                                                soPath = modulePath + "/modules/" + soName;
-                                            }
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                        } catch (const nlohmann::json::parse_error &e) {
-                            LOGI("JSON parse error: %s\n", e.what());
-                        }
-                    }
+            // 2. 构造完整的 SO 路径
+            // 确保是从模块根目录下的 modules 文件夹寻找
+            std::string soPath = rootPath + "/modules/" + config.soName;
+            
+            LOGI("Target match! Process: [%s], SO: [%s], Model: %s", 
+                 process, 
+                 soPath.c_str(),
+                 (config.model == InjectModel::CUSTOM_LINKER ? "custom_linker" : 
+                 (config.model == InjectModel::MEMFD_JIT ? "memfd_jit" : "memfd")));
+
+            // 3. 使用工厂创建对应的注入策略
+            auto injector = InjectorFactory::create(config.model, this->vm);
+            if (injector) {
+                if (injector->doInject(soPath)) {
+                    LOGI("Successfully injected [%s] into [%s]", config.soName.c_str(), process);
+                } else {
+                    LOGI("Failed to inject [%s] into [%s]", config.soName.c_str(), process);
                 }
-                close(cfd);
-            }
-            close(dirfd);
-        }
-
-        if (!soPath.empty()) {
-            if (useCustomLinker) {
-                LOGI("process=[%s], target soPath=[%s], loading via custom linker...\n", process, soPath.c_str());
-                loadSoWithCustomLinker(soPath);
-            } else {
-                LOGI("process=[%s], target soPath=[%s], loading via memfd...\n", process, soPath.c_str());
-                loadSo(soPath);
             }
         }
-    }
-
-    void preSpecialize(const char *process) {
-        LOGI("process=[%s], preServerSpecialize\n", process);
-    }
-
-    void loadSoWithCustomLinker(std::string soPath) {
-        if (mylinker_load_library(soPath.c_str(), this->vm)) {
-            LOGI("Successfully loaded .so via custom linker: %s\n", soPath.c_str());
-        } else {
-            LOGI("Failed to load .so via custom linker: %s\n", soPath.c_str());
-        }
-    }
-
-    void loadSo(std::string soPath) {
-        int fd = open(soPath.c_str(), O_RDONLY | O_CLOEXEC);
-        if (fd < 0) {
-            LOGI("Failed to open .so: %s\n", soPath.c_str());
-            return;
-        }
-
-        struct stat st;
-        if (fstat(fd, &st) != 0) {
-            close(fd);
-            return;
-        }
-
-        // 1. 创建 memfd
-        int memfd = syscall(__NR_memfd_create, "jit-cache", MFD_CLOEXEC);
-        if (memfd < 0) {
-            LOGI("Failed to create memfd: %s\n", strerror(errno));
-            close(fd);
-            return;
-        }
-
-        // 2. 将 .so 内容拷贝到 memfd
-        if (sendfile(memfd, fd, nullptr, st.st_size) != st.st_size) {
-            LOGI("Failed to sendfile to memfd: %s\n", strerror(errno));
-            close(fd);
-            close(memfd);
-            return;
-        }
-        close(fd);
-
-        // 3. 使用 android_dlopen_ext 从 fd 加载
-        android_dlextinfo extinfo;
-        extinfo.flags = ANDROID_DLEXT_USE_LIBRARY_FD;
-        extinfo.library_fd = memfd;
-
-        // 这里名字写成 jit-cache 可以迷惑检测，maps 中会显示 /memfd:jit-cache (deleted)
-        void *handle = android_dlopen_ext("jit-cache", RTLD_NOW, &extinfo);
-        if (handle) {
-            LOGI("Successfully loaded .so from memfd: %s\n", soPath.c_str());
-        } else {
-            LOGI("Failed to load .so from memfd: %s, error: %s\n", soPath.c_str(), dlerror());
-        }
-        close(memfd);
-    }
-
-    void loadDex(std::string soPath) {
-
+        
+        close(dirfd);
     }
 };
 
+/**
+ * @brief Companion 处理逻辑 (可选)
+ * 用于处理 Zygisk 的 Companion 服务请求（以 root 权限运行）。
+ */
 static int urandom = -1;
-
-// root companion 处理函数：在 root 守护进程中生成随机数并通过 socket 返回
-static void companion_handler(int i) {
+static void companion_handler(int socket_fd) {
     if (urandom < 0) {
         urandom = open("/dev/urandom", O_RDONLY);
     }
     unsigned r;
-    read(urandom, &r, sizeof(r));
-    LOGI("companion r=[%u]\n", r);
-    write(i, &r, sizeof(r));
+    if (read(urandom, &r, sizeof(r)) > 0) {
+        LOGI("Companion service: generated random seed: %u", r);
+        write(socket_fd, &r, sizeof(r));
+    }
 }
 
-// 注册模块类与 companion 处理函数，使 Zygisk 能在相应阶段回调
+// 注册 Zygisk 模块类
 REGISTER_ZYGISK_MODULE(ZygiskAttach)
 
+// 注册 Companion 处理函数
 REGISTER_ZYGISK_COMPANION(companion_handler)

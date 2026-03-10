@@ -1,7 +1,18 @@
-﻿[
+[
   {
+    "_help": {
+      "package": "目标包名或进程名前缀，例如 'com.android.settings'",
+      "loadSo": "是否加载 SO 库 (true/false)",
+      "soName": "SO 文件名 (需放在 modules 目录下)",
+      "model": "注入模式: 'memfd' (普通加载), 'custom_linker' (自定义链接器), 'memfd_jit' (进阶 Hunter 规避, 模拟 JIT 缓存)",
+      "loadDex": "是否加载 DEX (预留功能)",
+      "dexPath": "DEX 文件的完整路径 (预留功能)"
+    },
     "package": "com.zhenxi.hunter",
     "loadSo": true,
-    "soName": "libtrace.so"
+    "soName": "libtrace.so",
+    "model": "memfd_jit",
+    "loadDex": false,
+    "dexPath": ""
   }
 ]

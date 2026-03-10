@@ -8,6 +8,7 @@ public:
     ~ElfReader();
 
     bool Open(const char* path);
+    bool Open(void* address, size_t size);
     bool Read();
     void Close();
 
