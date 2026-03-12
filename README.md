@@ -15,6 +15,8 @@ module_id
 - 使用 gradlew 编译：`产物有so`和`magisk`对应的zip
 
 > ./gradlew zipRelease 
+> 
+> ./gradlew :module:zipDebug // 编译debug模式，ui不会有签名问题，
 
 
 ```text

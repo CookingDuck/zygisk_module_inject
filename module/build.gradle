@@ -47,6 +47,8 @@ afterEvaluate {
 
         task("prepareMagiskFiles${variantCapped}", type: Sync) {
             dependsOn("assemble$variantCapped")
+            // 改为依赖 debug 构建，因为它自带签名
+            dependsOn(":manager:assembleDebug")
 
             duplicatesStrategy = DuplicatesStrategy.INCLUDE
 
@@ -56,6 +58,14 @@ afterEvaluate {
             from(templatePath) {
                 exclude 'module.prop'
             }
+            // 复制带有调试签名的 Debug APK
+            from("${rootDir}/manager/build/outputs/apk/debug/manager-debug.apk") {
+                rename { "manager.apk" }
+            }
+            // 如果你没有配置签名，可以使用 debug 版测试，或者指向正确的 release apk 路径
+            // from("${rootDir}/manager/build/outputs/apk/debug/manager-debug.apk") {
+            //    rename { "manager.apk" }
+            // }
             from(templatePath) {
                 include 'module.prop'
                 expand([

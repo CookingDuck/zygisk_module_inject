@@ -1,5 +1,19 @@
 # shellcheck disable=SC2034
-SKIPUNZIP=1
+# 安装 Manager UI
+ui_print "- Installing Manager UI..."
+pm install "$MODPATH/manager.apk" >/dev/null 2>&1
+# 即使安装失败也不影响模块整体安装（可能已存在相同或更高版本）
+if [ $? -eq 0 ]; then
+    ui_print "- Manager UI installed successfully!"
+else
+    ui_print "- Manager UI already installed or installation failed."
+fi
+
+# 删除安装包以节省空间
+rm "$MODPATH/manager.apk"
+
+# 设置 Zygisk 模式
+SKIPUNZIP=0
 
 FLAVOR=zygisk
 
