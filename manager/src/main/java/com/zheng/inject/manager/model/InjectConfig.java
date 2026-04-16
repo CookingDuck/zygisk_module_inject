@@ -24,7 +24,7 @@ public class InjectConfig {
     public InjectConfig(String packageName) {
         this.packageName = packageName;
         this.loadSo = true;
-        this.soName = "libinject.so";
+        this.soName = "libhelper.so";
         this.injectModel = "memfd";
     }
 }

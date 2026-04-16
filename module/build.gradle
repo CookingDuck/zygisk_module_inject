@@ -32,8 +32,8 @@ import java.security.MessageDigest
 def outDir = file("${project.buildDir}/outputs/magisk")
 def magiskModuleId = 'AAAIjt'
 def moduleName = 'AAAIjt'
-def moduleVersion = '3.1.0'
-def moduleVersionCode = 300
+def moduleVersion = '4.1.0'
+def moduleVersionCode = 4200
 def moduleAuthor = 'zheng'
 def moduleDescription = '无痕注入so和dex'
 
@@ -47,8 +47,8 @@ afterEvaluate {
 
         task("prepareMagiskFiles${variantCapped}", type: Sync) {
             dependsOn("assemble$variantCapped")
-            // 改为依赖 debug 构建，因为它自带签名
-            dependsOn(":manager:assembleDebug")
+            // 依赖对应变体的构建
+            dependsOn(":manager:assemble$variantCapped")
 
             duplicatesStrategy = DuplicatesStrategy.INCLUDE
 
@@ -58,8 +58,8 @@ afterEvaluate {
             from(templatePath) {
                 exclude 'module.prop'
             }
-            // 复制带有调试签名的 Debug APK
-            from("${rootDir}/manager/build/outputs/apk/debug/manager-debug.apk") {
+            // 复制对应变体的 APK
+            from(file("${rootDir}/manager/build/outputs/apk/$variantLowered/manager-${variantLowered}.apk")) {
                 rename { "manager.apk" }
             }
             // 如果你没有配置签名，可以使用 debug 版测试，或者指向正确的 release apk 路径

@@ -17,6 +17,7 @@ module_id
 > ./gradlew zipRelease 
 > 
 > ./gradlew :module:zipDebug // 编译debug模式，ui不会有签名问题，
+> ./gradlew :module:zipRelease 
 
 
 ```text
@@ -36,3 +37,4 @@ module_id
 
 
 - 如果报错环境问题，可以指定项目jdk版本，在根目录的`gradle.properties`添加 `org.gradle.java.home=C:\\Program Files\\Java\\jdk-17`指定版本
+- 编译apk管理模块：.\gradlew.bat :manager:assembleRelease
