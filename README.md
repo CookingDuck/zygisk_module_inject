@@ -1,6 +1,6 @@
 # Zygisk Module Injector
 
-这是一个基于 Zygisk 实现的 Android So 注入工具。它能够无痕地将自定义 So 文件注入到目标进程中，并提供了一个 UI 管理端（Manager APK）来便捷地配置注入逻辑。
+本着学习Zygisk，然后实现的 Android So 注入工具，也算是为了检测做铺垫，提供了一个 UI 管理端（Manager APK）来便捷地配置注入逻辑。
 
 ## 核心特性
 
@@ -70,8 +70,7 @@
    - 选择 **加载模式**（默认为 `memfd`）。
 4. **生效注入**：保存配置后，管理应用会自动将 `/data/local/tmp/` 下的 So 拷贝到模块私有目录。重启目标应用，注入即可完成。
 
-## 技术细节
 
-- **注入路径**：管理端会将 So 拷贝至 `/data/adb/modules/AAAIjt/modules/`，Zygisk 模块从中读取。
-- **权限处理**：模块会自动修复配置文件与 So 文件的 SELinux 上下文（`u:object_r:magisk_file:s0`），确保在严苛模式下也能正常加载。
-- **规避检测**：`memfd_jit` 模式通过模拟 JIT 缓存文件名称，能够绕过部分针对内存加载 So 的安全检测。
+## 参考借鉴
+感谢 jiqiu2022 佬的开源，由于自己对于linker理解不深，使用了佬自定义linker的效果，原地址项目
+- https://github.com/jiqiu2022/Zygisk-MyInjector
