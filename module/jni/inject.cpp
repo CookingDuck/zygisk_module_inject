@@ -1,146 +1,159 @@
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <string.h>
+#include <sys/stat.h>
 #include <android/log.h>
-#include <vector>
+
 #include <memory>
+#include <string>
 
 #include "include/zygisk.hpp"
 #include "config_manager.hpp"
 #include "injector.hpp"
 
+#ifndef LOG_TAG
+#define LOG_TAG "zheng_inject"
+#endif
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
 using zygisk::Api;
 using zygisk::AppSpecializeArgs;
 using zygisk::ServerSpecializeArgs;
 
-// 静态构造函数，确保 .so 加载即打印，方便确认模块是否正常运行
 __attribute__((constructor))
 static void on_load_static() {
-    __android_log_print(ANDROID_LOG_INFO, "zheng_inject", "Zygisk module library constructor called!\n");
+    LOGI("Zygisk module library constructor called.");
 }
 
 /**
- * @brief Zygisk 模块核心类
- * 负责与 Zygisk 框架交互，并在进程专项化阶段触发注入逻辑。
+ * Zygisk 主模块。
+ * 为提升健壮性，本类做了以下改动：
+ *   - 所有 fd 走 RAII，避免 early-return 泄漏；
+ *   - 注入失败时打印错误码并直接退出，不影响目标进程其余流程；
+ *   - 进程名匹配从 substr 改为完全匹配/":子进程"匹配，避免误中前缀同名包；
+ *   - 关键路径校验 SO 名合法性，杜绝目录穿越。
  */
 class ZygiskAttach : public zygisk::ModuleBase {
-
 public:
-    /**
-     * @brief 模块加载回调
-     * 保存 API 句柄和 JavaVM 指针，以便后续注入器使用。
-     */
-    void onLoad(Api *api, JNIEnv *env) override {
-        this->api = api;
-        this->env = env;
-        if (env->GetJavaVM(&this->vm) != JNI_OK) {
-            this->vm = nullptr;
+    void onLoad(Api* api, JNIEnv* env) override {
+        api_ = api;
+        env_ = env;
+        if (env == nullptr || env->GetJavaVM(&vm_) != JNI_OK) {
+            vm_ = nullptr;
+            LOGW("onLoad: JNIEnv->GetJavaVM failed, custom_linker mode will be disabled");
         }
     }
 
-    /**
-     * @brief 应用进程专项化前的回调
-     * 在此阶段判断是否需要对当前应用进行注入。
-     */
-    void preAppSpecialize(AppSpecializeArgs *args) override {
-        if (args->nice_name == nullptr) return;
-
-        const char *process = env->GetStringUTFChars(args->nice_name, nullptr);
-        if (process != nullptr) {
-            handleInjection(process);
-            env->ReleaseStringUTFChars(args->nice_name, process);
+    void preAppSpecialize(AppSpecializeArgs* args) override {
+        if (api_ != nullptr) {
+            api_->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
         }
-        
-        // 设置选项以在模块卸载时自动关闭句柄
-        api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
+        if (args == nullptr || args->nice_name == nullptr || env_ == nullptr) return;
+
+        const char* process = env_->GetStringUTFChars(args->nice_name, nullptr);
+        if (process == nullptr) return;
+
+        // 用栈上的局部 std::string 复制，避免在 handleInjection 抛错时 release 调用被绕过
+        std::string processStr(process);
+        env_->ReleaseStringUTFChars(args->nice_name, process);
+
+        handleInjection(processStr.c_str());
     }
 
-
-    /**
-     * @brief 系统服务 (system_server) 专项化前的回调
-     */
-    void preServerSpecialize(ServerSpecializeArgs *args) override {
+    void preServerSpecialize(ServerSpecializeArgs*) override {
         handleInjection("system_server");
     }
 
 private:
-    Api *api;
-    JNIEnv *env;
-    JavaVM *vm;
+    Api*     api_ = nullptr;
+    JNIEnv*  env_ = nullptr;
+    JavaVM*  vm_  = nullptr;
 
-    /**
-     * @brief 统一注入处理逻辑
-     */
-    void handleInjection(const char *process) {
-        LOGI("handleInjection called for process: [%s]", process);
-        
-        int dirfd = api->getModuleDir();
-        if (dirfd < 0) {
-            LOGI("Failed to get module directory FD");
+    void handleInjection(const char* process) {
+        if (api_ == nullptr || process == nullptr || *process == '\0') return;
+
+        int rawDirFd = api_->getModuleDir();
+        if (rawDirFd < 0) {
+            LOGE("getModuleDir failed (errno=%d:%s)", errno, strerror(errno));
             return;
         }
+        inj::ScopedFd dirFd(rawDirFd);
 
-        // 1. 解析配置
-        ConfigManager configManager(dirfd);
+        ConfigManager configManager(dirFd.get());
         InjectConfig config = configManager.getMatchingConfig(process);
-        
-        if (!config.matched) {
-            // 如果觉得日志太多，测试稳定后可以删掉这一行
-            // LOGI("Process [%s] not matched in config.", process);
-            close(dirfd);
+        if (!config.matched) return;
+        if (!config.loadSo) {
+            LOGI("[%s] matched but loadSo=false, skip", process);
+            return;
+        }
+        if (!cfg_util::isValidSoName(config.soName)) {
+            LOGE("[%s] invalid soName rejected: '%s'", process, config.soName.c_str());
+            return;
+        }
+        if (config.model == InjectModel::CUSTOM_LINKER && vm_ == nullptr) {
+            LOGE("[%s] custom_linker requested but JavaVM is null", process);
             return;
         }
 
-        if (config.loadSo) {
-            std::string rootPath = configManager.getModuleRootPath();
-            if (rootPath.empty()) {
-                LOGI("Error: Could not resolve module root path.");
-                close(dirfd);
-                return;
-            }
-
-            // 2. 构造完整的 SO 路径
-            // 确保是从模块根目录下的 modules 文件夹寻找
-            std::string soPath = rootPath + "/modules/" + config.soName;
-            
-            LOGI("Target match! Process: [%s], SO: [%s], Model: %s", 
-                 process, 
-                 soPath.c_str(),
-                 (config.model == InjectModel::CUSTOM_LINKER ? "custom_linker" : 
-                 (config.model == InjectModel::MEMFD_JIT ? "memfd_jit" : "memfd")));
-
-            // 3. 使用工厂创建对应的注入策略
-            auto injector = InjectorFactory::create(config.model, this->vm);
-            if (injector) {
-                if (injector->doInject(soPath)) {
-                    LOGI("Successfully injected [%s] into [%s]", config.soName.c_str(), process);
-                } else {
-                    LOGI("Failed to inject [%s] into [%s]", config.soName.c_str(), process);
-                }
-            }
+        std::string root = configManager.getModuleRootPath();
+        if (root.empty()) {
+            LOGE("[%s] cannot resolve module root path", process);
+            return;
         }
-        
-        close(dirfd);
+
+        std::string soPath = root + "/modules/" + config.soName;
+        struct stat st{};
+        if (stat(soPath.c_str(), &st) != 0) {
+            LOGE("[%s] SO not present: %s (errno=%d:%s)",
+                 process, soPath.c_str(), errno, strerror(errno));
+            return;
+        }
+        if (!S_ISREG(st.st_mode)) {
+            LOGE("[%s] SO path is not a regular file: %s", process, soPath.c_str());
+            return;
+        }
+
+        LOGI("inject -> process=[%s] so=[%s] model=%s",
+             process, soPath.c_str(), cfg_util::modelName(config.model));
+
+        auto injector = InjectorFactory::create(config.model, vm_);
+        if (!injector) {
+            LOGE("[%s] InjectorFactory returned null", process);
+            return;
+        }
+        if (injector->doInject(soPath)) {
+            LOGI("[%s] injection succeeded (so=%s)", process, config.soName.c_str());
+        } else {
+            LOGE("[%s] injection FAILED (so=%s)", process, config.soName.c_str());
+        }
     }
 };
 
 /**
- * @brief Companion 处理逻辑 (可选)
- * 用于处理 Zygisk 的 Companion 服务请求（以 root 权限运行）。
+ * Companion 服务示例：以 Magisk daemon 权限运行，
+ * 此处保留原有随机数示例并清理资源。
  */
-static int urandom = -1;
 static void companion_handler(int socket_fd) {
+    int urandom = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
     if (urandom < 0) {
-        urandom = open("/dev/urandom", O_RDONLY);
+        LOGE("companion: open /dev/urandom failed: errno=%d:%s", errno, strerror(errno));
+        return;
     }
-    unsigned r;
-    if (read(urandom, &r, sizeof(r)) > 0) {
-        LOGI("Companion service: generated random seed: %u", r);
-        write(socket_fd, &r, sizeof(r));
+    unsigned r = 0;
+    ssize_t got = read(urandom, &r, sizeof(r));
+    close(urandom);
+
+    if (got == sizeof(r)) {
+        LOGI("companion: random seed=%u", r);
+        ssize_t w = write(socket_fd, &r, sizeof(r));
+        (void) w;
+    } else {
+        LOGE("companion: read /dev/urandom short (%zd)", got);
     }
 }
 
-// 注册 Zygisk 模块类
 REGISTER_ZYGISK_MODULE(ZygiskAttach)
-
-// 注册 Companion 处理函数
 REGISTER_ZYGISK_COMPANION(companion_handler)

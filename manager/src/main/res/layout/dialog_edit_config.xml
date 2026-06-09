@@ -1,34 +1,76 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:padding="24dp">
+    android:paddingStart="24dp"
+    android:paddingEnd="24dp"
+    android:paddingTop="16dp"
+    android:paddingBottom="8dp">
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/tilSoName"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+        app:endIconMode="custom"
+        app:endIconDrawable="@drawable/ic_folder"
+        app:endIconContentDescription="@string/picker_tmp_title"
+        android:hint="@string/dialog_label_so_name">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/etSoName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="text"
+            android:maxLines="1" />
+
+    </com.google.android.material.textfield.TextInputLayout>
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="SO Filename"
-        android:textSize="14sp" />
+        android:layout_marginTop="20dp"
+        android:layout_marginBottom="6dp"
+        android:text="@string/dialog_label_inject_model"
+        android:textColor="@color/text_secondary"
+        android:textSize="13sp" />
 
-    <EditText
-        android:id="@+id/etSoName"
+    <com.google.android.material.button.MaterialButtonToggleGroup
+        android:id="@+id/toggleModel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="libexample.so"
-        android:inputType="text" />
+        app:singleSelection="true"
+        app:selectionRequired="true">
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:text="Injection Model"
-        android:textSize="14sp" />
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnMemfd"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="memfd"
+            android:textSize="12sp" />
 
-    <Spinner
-        android:id="@+id/spinnerModel"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp" />
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnLinker"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="linker"
+            android:textSize="12sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnJit"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="memfd_jit"
+            android:textSize="12sp" />
+
+    </com.google.android.material.button.MaterialButtonToggleGroup>
 
 </LinearLayout>

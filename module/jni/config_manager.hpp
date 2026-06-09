@@ -4,133 +4,193 @@
 #include <vector>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <string.h>
 #include <sys/stat.h>
+#include <linux/limits.h>
+#include <android/log.h>
 #include "include/json.hpp"
 
+#ifndef LOG_TAG
+#define LOG_TAG "zheng_inject"
+#endif
+#define CFG_LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+#define CFG_LOGW(...) __android_log_print(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__)
+#define CFG_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
 /**
- * @brief 注入配置模型枚举
+ * @brief 注入加载模式
  */
 enum class InjectModel {
     MEMFD,          ///< 默认：使用 memfd 加载
     CUSTOM_LINKER,  ///< 使用自定义链接器加载
-    MEMFD_JIT       ///< 进阶：模拟 JIT 缓存的 memfd 加载 (针对 Hunter 规避)
+    MEMFD_JIT       ///< memfd + 伪装命名 (针对部分检测规避)
 };
 
 /**
  * @brief 注入任务配置项
  */
 struct InjectConfig {
-    std::string package;          ///< 目标进程/包名
-    bool loadSo = false;          ///< 是否加载 SO
-    std::string soName;           ///< SO 文件名
-    InjectModel model = InjectModel::MEMFD; ///< 加载模型
-    bool loadDex = false;         ///< 是否加载 DEX (预留)
-    std::string dexPath;          ///< DEX 路径 (预留)
-    bool matched = false;         ///< 是否匹配成功
+    std::string package;
+    bool        loadSo = false;
+    std::string soName;
+    InjectModel model  = InjectModel::MEMFD;
+    bool        loadDex = false;
+    std::string dexPath;
+    bool        matched = false;
 };
 
+namespace cfg_util {
+
 /**
- * @brief 配置管理器：负责解析 config.json 并匹配进程
+ * 校验 SO 文件名：字母数字 . _ -，长度 1~128，禁止路径分隔符及 ".."。
+ * 与 manager 端 ConfigRepository.isValidSoName 保持一致。
+ */
+inline bool isValidSoName(const std::string& s) {
+    if (s.empty() || s.size() > 128) return false;
+    if (s.find("..") != std::string::npos) return false;
+    for (char c : s) {
+        bool ok = (c >= 'A' && c <= 'Z') ||
+                  (c >= 'a' && c <= 'z') ||
+                  (c >= '0' && c <= '9') ||
+                  c == '.' || c == '_' || c == '-';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+/**
+ * 进程名匹配：等于包名 或 以 "包名:" 开头（多进程子进程：xxx.app:push）。
+ * 这样可以避免 substr(0, len) 造成 com.foo 命中 com.foo.bar 的问题。
+ */
+inline bool processMatch(const std::string& process, const std::string& pkg) {
+    if (pkg.empty() || process.empty()) return false;
+    if (process == pkg) return true;
+    if (process.size() > pkg.size() &&
+        process.compare(0, pkg.size(), pkg) == 0 &&
+        process[pkg.size()] == ':') {
+        return true;
+    }
+    return false;
+}
+
+inline InjectModel parseModel(const std::string& s) {
+    if (s == "custom_linker") return InjectModel::CUSTOM_LINKER;
+    if (s == "memfd_jit")     return InjectModel::MEMFD_JIT;
+    return InjectModel::MEMFD;
+}
+
+inline const char* modelName(InjectModel m) {
+    switch (m) {
+        case InjectModel::CUSTOM_LINKER: return "custom_linker";
+        case InjectModel::MEMFD_JIT:     return "memfd_jit";
+        case InjectModel::MEMFD:
+        default:                          return "memfd";
+    }
+}
+
+} // namespace cfg_util
+
+/**
+ * @brief 配置管理：解析 config.json 并按进程名匹配。
+ *        独立于 Zygisk Api，方便单元测试和复用。
  */
 class ConfigManager {
 public:
-    /**
-     * @brief 构造函数
-     * @param dirfd Zygisk 提供的模块目录句柄
-     */
-    explicit ConfigManager(int dirfd) : moduleDirFd(dirfd) {}
+    explicit ConfigManager(int dirfd) : moduleDirFd_(dirfd) {}
 
-    /**
-     * @brief 根据进程名从配置文件中匹配相应的注入项
-     */
     InjectConfig getMatchingConfig(const char* process) {
         InjectConfig result;
-        if (moduleDirFd < 0 || !process) return result;
+        if (moduleDirFd_ < 0 || process == nullptr || *process == '\0') return result;
 
-        // 尝试打开当前目录下的 config.json
-        int cfd = openat(moduleDirFd, "config.json", O_RDONLY | O_CLOEXEC);
-        
-        // 如果找不到，尝试在上一级目录查找 (兼容某些 Zygisk 环境)
-        if (cfd < 0) {
-            cfd = openat(moduleDirFd, "../config.json", O_RDONLY | O_CLOEXEC);
-            if (cfd >= 0) {
-                isParentRoot = true; // 标记根目录在上一级
-            }
+        // config.json 优先在模块目录，回退到上一级（部分 Zygisk 环境会传入 zygisk 子目录的 fd）
+        int cfd = openat(moduleDirFd_, "config.json", O_RDONLY | O_CLOEXEC);
+        if (cfd < 0 && errno == ENOENT) {
+            cfd = openat(moduleDirFd_, "../config.json", O_RDONLY | O_CLOEXEC);
+            if (cfd >= 0) parentRoot_ = true;
         }
-
         if (cfd < 0) {
-            __android_log_print(ANDROID_LOG_ERROR, "zheng_inject", "Error: config.json NOT FOUND! (checked . and ..)");
+            CFG_LOGE("config.json not found (errno=%d:%s)", errno, strerror(errno));
             return result;
         }
 
-        struct stat st;
-        if (fstat(cfd, &st) == 0 && st.st_size > 0) {
-            std::vector<char> buf(st.st_size + 1);
-            ssize_t n = read(cfd, buf.data(), st.st_size);
-            if (n > 0) {
-                buf[n] = 0;
-                try {
-                    auto j = nlohmann::json::parse(buf.data());
-                    if (j.is_array()) {
-                        for (const auto& item : j) {
-                            std::string pkg = item.value("package", "");
-                            if (pkg.empty()) continue;
-
-                            if (std::string(process).find(pkg) == 0) {
-                                result.package = pkg;
-                                result.loadSo = item.value("loadSo", false);
-                                result.soName = item.value("soName", "");
-                                result.loadDex = item.value("loadDex", false);
-                                result.dexPath = item.value("dexPath", "");
-                                
-                                std::string modelStr = item.value("model", "memfd");
-                                if (modelStr == "custom_linker") {
-                                    result.model = InjectModel::CUSTOM_LINKER;
-                                } else if (modelStr == "memfd_jit") {
-                                    result.model = InjectModel::MEMFD_JIT;
-                                } else {
-                                    result.model = InjectModel::MEMFD;
-                                }
-                                
-                                result.matched = true;
-                                break;
-                            }
-                        }
-                    }
-                } catch (const std::exception& e) {
-                    __android_log_print(ANDROID_LOG_ERROR, "zheng_inject", "JSON parse error: %s", e.what());
-                }
-            }
+        struct stat st{};
+        if (fstat(cfd, &st) != 0 || st.st_size <= 0 || st.st_size > kMaxCfgSize) {
+            CFG_LOGE("config.json fstat invalid (size=%lld errno=%d)",
+                     (long long) st.st_size, errno);
+            close(cfd);
+            return result;
         }
+
+        std::vector<char> buf;
+        buf.resize(static_cast<size_t>(st.st_size) + 1);
+
+        size_t off = 0;
+        while (off < (size_t) st.st_size) {
+            ssize_t n = read(cfd, buf.data() + off, (size_t) st.st_size - off);
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                CFG_LOGE("read config.json failed: errno=%d:%s", errno, strerror(errno));
+                close(cfd);
+                return result;
+            }
+            if (n == 0) break;
+            off += (size_t) n;
+        }
+        buf[off] = '\0';
         close(cfd);
+
+        try {
+            auto j = nlohmann::json::parse(buf.data(), buf.data() + off, nullptr, false);
+            if (j.is_discarded() || !j.is_array()) {
+                CFG_LOGE("config.json is not a valid JSON array");
+                return result;
+            }
+
+            std::string proc(process);
+            for (const auto& item : j) {
+                if (!item.is_object()) continue;
+                std::string pkg = item.value("package", "");
+                if (!cfg_util::processMatch(proc, pkg)) continue;
+
+                result.package = pkg;
+                result.loadSo  = item.value("loadSo", false);
+                result.soName  = item.value("soName", "");
+                result.loadDex = item.value("loadDex", false);
+                result.dexPath = item.value("dexPath", "");
+                result.model   = cfg_util::parseModel(item.value("model", "memfd"));
+                result.matched = true;
+                break;
+            }
+        } catch (const std::exception& e) {
+            CFG_LOGE("JSON parse error: %s", e.what());
+        }
         return result;
     }
 
     /**
-     * @brief 获取模块根目录的绝对路径
+     * 通过 /proc/self/fd 反查模块目录的真实路径。
      */
-    std::string getModuleRootPath() {
-        if (moduleDirFd < 0) return "";
-        char path[PATH_MAX];
+    std::string getModuleRootPath() const {
+        if (moduleDirFd_ < 0) return {};
         char proc_path[64];
-        snprintf(proc_path, sizeof(proc_path), "/proc/self/fd/%d", moduleDirFd);
+        snprintf(proc_path, sizeof(proc_path), "/proc/self/fd/%d", moduleDirFd_);
+
+        char path[PATH_MAX];
         ssize_t len = readlink(proc_path, path, sizeof(path) - 1);
-        if (len != -1) {
-            path[len] = '\0';
-            std::string fullPath(path);
-            if (isParentRoot) {
-                // 如果根目录在上一级，去掉末尾的子目录名
-                size_t lastSlash = fullPath.find_last_of('/');
-                if (lastSlash != std::string::npos) {
-                    return fullPath.substr(0, lastSlash);
-                }
-            }
-            return fullPath;
+        if (len <= 0) return {};
+        path[len] = '\0';
+
+        std::string full(path);
+        if (parentRoot_) {
+            size_t lastSlash = full.find_last_of('/');
+            if (lastSlash != std::string::npos) return full.substr(0, lastSlash);
         }
-        return "";
+        return full;
     }
 
 private:
-    int moduleDirFd;
-    bool isParentRoot = false; // 是否需要回溯到父目录作为根
+    static constexpr off_t kMaxCfgSize = 4 * 1024 * 1024;  // 4MB 上限
+    int  moduleDirFd_;
+    bool parentRoot_ = false;
 };

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand_primary">#7AA8FF</color>
+    <color name="brand_primary_variant">#5B8DEE</color>
+    <color name="brand_accent">#B388FF</color>
+
+    <color name="bg_window">#0F1115</color>
+    <color name="bg_surface">#1B1E23</color>
+    <color name="bg_surface_alt">#22262D</color>
+
+    <color name="divider">#1FFFFFFF</color>
+
+    <color name="text_primary">#FFE6E1E5</color>
+    <color name="text_secondary">#FFCAC4D0</color>
+    <color name="text_tertiary">#FF938F99</color>
+
+    <color name="status_enabled">#66BB6A</color>
+    <color name="status_disabled">#546E7A</color>
+    <color name="status_warn">#FFA726</color>
+    <color name="status_error">#EF5350</color>
+
+    <color name="chip_bg">#243046</color>
+    <color name="chip_text">#7AA8FF</color>
+</resources>
